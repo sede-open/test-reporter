@@ -15,10 +15,11 @@ import {DotnetTrxParser} from './parsers/dotnet-trx/dotnet-trx-parser'
 import {JavaJunitParser} from './parsers/java-junit/java-junit-parser'
 import {JestJunitParser} from './parsers/jest-junit/jest-junit-parser'
 import {MochaJsonParser} from './parsers/mocha-json/mocha-json-parser'
+import {RspecJsonParser} from './parsers/rspec-json/rspec-json-parser'
+import {SwiftXunitParser} from './parsers/swift-xunit/swift-xunit-parser'
 
 import {normalizeDirPath, normalizeFilePath} from './utils/path-utils'
 import {getCheckRunContext} from './utils/github-utils'
-import {Icon} from './utils/markdown-utils'
 
 async function main(): Promise<void> {
   try {
@@ -40,6 +41,7 @@ class TestReporter {
   readonly listTests = core.getInput('list-tests', {required: true}) as 'all' | 'failed' | 'none'
   readonly maxAnnotations = parseInt(core.getInput('max-annotations', {required: true}))
   readonly failOnError = core.getInput('fail-on-error', {required: true}) === 'true'
+  readonly failOnEmpty = core.getInput('fail-on-empty', {required: true}) === 'true'
   readonly workDirInput = core.getInput('working-directory', {required: false})
   readonly onlySummary = core.getInput('only-summary', {required: false}) === 'true'
   readonly token = core.getInput('token', {required: true})
@@ -135,7 +137,7 @@ class TestReporter {
       return
     }
 
-    if (results.length === 0) {
+    if (results.length === 0 && this.failOnEmpty) {
       core.setFailed(`No test report files were found`)
       return
     }
@@ -181,7 +183,11 @@ class TestReporter {
 
     const isFailed = this.failOnError && results.some(tr => tr.result === 'failed')
     const conclusion = isFailed ? 'failure' : 'success'
-    const icon = isFailed ? Icon.fail : Icon.success
+
+    const passed = results.reduce((sum, tr) => sum + tr.passed, 0)
+    const failed = results.reduce((sum, tr) => sum + tr.failed, 0)
+    const skipped = results.reduce((sum, tr) => sum + tr.skipped, 0)
+    const shortSummary = `${passed} passed, ${failed} failed and ${skipped} skipped `
 
     core.info(`Updating check run conclusion (${conclusion}) and output`)
     const resp = await this.octokit.rest.checks.update({
@@ -189,7 +195,7 @@ class TestReporter {
       conclusion,
       status: 'completed',
       output: {
-        title: `${name} ${icon}`,
+        title: shortSummary,
         summary,
         annotations
       },
@@ -198,6 +204,8 @@ class TestReporter {
     core.info(`Check run create response: ${resp.status}`)
     core.info(`Check run URL: ${resp.data.url}`)
     core.info(`Check run HTML: ${resp.data.html_url}`)
+    core.setOutput('url', resp.data.url)
+    core.setOutput('url_html', resp.data.html_url)
 
     return results
   }
@@ -216,6 +224,10 @@ class TestReporter {
         return new JestJunitParser(options)
       case 'mocha-json':
         return new MochaJsonParser(options)
+      case 'rspec-json':
+        return new RspecJsonParser(options)
+      case 'swift-xunit':
+        return new SwiftXunitParser(options)
       default:
         throw new Error(`Input variable 'reporter' is set to invalid value '${reporter}'`)
     }
